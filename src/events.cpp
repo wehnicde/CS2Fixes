@@ -354,3 +354,65 @@ GAME_EVENT_F(cs_win_panel_match)
 	if (!g_pMapVoteSystem->IsVoteOngoing())
 		g_pMapVoteSystem->StartVote();
 }
+
+GAME_EVENT_F(weapon_fire)
+{
+	if (!g_cvarEnableHide.Get())
+		return;
+
+	CCSPlayerController* pController = (CCSPlayerController*)pEvent->GetPlayerController("userid");
+
+	if (!pController)
+		return;
+
+	ZEPlayer* pPlayer = pController->GetZEPlayer();
+
+	if (pPlayer)
+	{
+		pPlayer->SetLastNoiseTime(GetGlobals()->curtime);
+	}
+}
+
+GAME_EVENT_F(player_footstep)
+{
+	if (!g_cvarEnableHide.Get())
+		return;
+
+	CCSPlayerController* pController = (CCSPlayerController*)pEvent->GetPlayerController("userid");
+
+	if (!pController)
+		return;
+
+	CBasePlayerPawn* pPawn = pController->GetPawn();
+	ZEPlayer* pPlayer = pController->GetZEPlayer();
+
+	if (pPlayer && pPawn)
+	{
+		// Only count if player is moving fast enough (running vs walking)
+		Vector velocity = pPawn->m_vecAbsVelocity();
+		float speed = velocity.Length2D();
+
+		if (speed > 100.0f)
+		{
+			pPlayer->SetLastNoiseTime(GetGlobals()->curtime);
+		}
+	}
+}
+
+GAME_EVENT_F(player_jump)
+{
+	if (!g_cvarEnableHide.Get())
+		return;
+
+	CCSPlayerController* pController = (CCSPlayerController*)pEvent->GetPlayerController("userid");
+
+	if (!pController)
+		return;
+
+	ZEPlayer* pPlayer = pController->GetZEPlayer();
+
+	if (pPlayer)
+	{
+		pPlayer->SetLastNoiseTime(GetGlobals()->curtime);
+	}
+}

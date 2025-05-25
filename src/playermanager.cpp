@@ -989,20 +989,31 @@ void CPlayerManager::CheckHideDistances()
 			{
 				auto pTargetPawn = pTargetController->GetPawn();
 
-				if (pTargetPawn)
+				if (pTargetPawn && pTargetPawn->IsAlive())
 				{
-					bool transmitValue = false;
+					bool shouldTransmit = false; // Default: show everyone
+					float currentTime = GetGlobals()->curtime;
+
+					ZEPlayer* pTargetZEPlayer = pTargetController->GetZEPlayer();
+					bool isTargetNoisy = false;
+					if (g_cvarNoiseDuration.Get() > 0.0f && pTargetZEPlayer)
+					{
+						isTargetNoisy = pTargetZEPlayer->IsRecentlyNoisy(currentTime);
+					}
 
 					if (hiddenTeam > 0 && pTargetController->m_iTeamNum == hiddenTeam)
 					{
-						transmitValue = true;
+						// Hide the specified team UNLESS they're making noise
+						shouldTransmit = !isTargetNoisy; // Show if noisy, hide if quiet
 					}
 					else if (hideDistance > 0 && (!g_cvarHideTeammatesOnly.Get() || pTargetController->m_iTeamNum == team))
 					{
-						transmitValue = pTargetPawn->GetAbsOrigin().DistToSqr(vecPosition) <= hideDistance * hideDistance;
+						bool withinDistance = pTargetPawn->GetAbsOrigin().DistToSqr(vecPosition) <= hideDistance * hideDistance;
+						// Show if within distance OR making noise
+						shouldTransmit = !(withinDistance || isTargetNoisy);
 					}
 
-					player->SetTransmit(j, transmitValue);
+					player->SetTransmit(j, shouldTransmit);
 				}
 			}
 		}

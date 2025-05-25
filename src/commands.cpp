@@ -432,6 +432,33 @@ CConVar<bool> g_cvarEnableHide("cs2f_hide_enable", FCVAR_NONE, "Whether to enabl
 CConVar<int> g_cvarDefaultHideDistance("cs2f_hide_distance_default", FCVAR_NONE, "The default distance for hide", 250, true, 0, false, 0);
 CConVar<int> g_cvarMaxHideDistance("cs2f_hide_distance_max", FCVAR_NONE, "The max distance for hide", 2000, true, 0, false, 0);
 CConVar<int> g_cvarHiddenTeam("cs2f_hidden_team", FCVAR_NONE, "Which team is hidden (0 = none, 2 = T, 3 = CT)", 0, true, 0, true, 3);
+CConVar<float> g_cvarNoiseDuration("cs2f_noise_duration", FCVAR_NONE, "How long players stay visible after making noise (0 = always hidden)", 3.0f, true, 0.0f, true, 10.0f);
+
+CON_COMMAND_CHAT(noisetime, "<seconds> - Set how long you stay visible after making noise (0 = always hidden)")
+{
+	if (!g_cvarEnableHide.Get())
+		return;
+
+	if (args.ArgC() < 2)
+	{
+		ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "Current noise duration: %.1f seconds", g_cvarNoiseDuration.Get());
+		return;
+	}
+
+	float duration = V_StringToFloat32(args[1], -1.0f);
+	if (duration < 0.0f || duration > 10.0f) // Allow 0.0f now
+	{
+		ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "Noise duration must be between 0.0 and 10.0 seconds (0 = always hidden)");
+		return;
+	}
+
+	g_cvarNoiseDuration.Set(duration);
+
+	if (duration == 0.0f)
+		ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "Noise visibility disabled - players stay hidden even when making noise");
+	else
+		ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "Noise duration set to %.1f seconds", duration);
+}
 
 CON_COMMAND_CHAT(hideteam, "<ct/t/off> - Hide an entire team from everyone")
 {
