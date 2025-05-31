@@ -461,7 +461,7 @@ CON_COMMAND_CHAT(noisetime, "<seconds> - Set how long you stay visible after mak
 		ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "Noise duration set to %.1f seconds", duration);
 }
 
-CON_COMMAND_CHAT(hideteam, "<ct/t/off> - Hide an entire team from everyone")
+CON_COMMAND_CHAT(hideteam, "<ct/t/both/off> - Hide an entire team from everyone")
 {
 	if (!g_cvarEnableHide.Get())
 		return;
@@ -474,7 +474,7 @@ CON_COMMAND_CHAT(hideteam, "<ct/t/off> - Hide an entire team from everyone")
 
 	if (args.ArgC() < 2)
 	{
-		ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "Usage: !hideteam <ct/t/off>");
+		ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "Usage: !hideteam <ct/t/both/off>");
 		return;
 	}
 
@@ -491,6 +491,11 @@ CON_COMMAND_CHAT(hideteam, "<ct/t/off> - Hide an entire team from everyone")
 		teamToHide = 2; // CS_TEAM_T
 		ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "Terrorists are now hidden from everyone.");
 	}
+	else if (V_strcasecmp(teamArg, "both") == 0)
+	{
+		teamToHide = 1; // Special value for both teams
+		ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "Both teams are now hidden from everyone.");
+	}
 	else if (V_strcasecmp(teamArg, "off") == 0)
 	{
 		teamToHide = 0;
@@ -498,7 +503,7 @@ CON_COMMAND_CHAT(hideteam, "<ct/t/off> - Hide an entire team from everyone")
 	}
 	else
 	{
-		ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "Invalid team. Use: ct, t, or off");
+		ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "Invalid team. Use: ct, t, both, or off");
 		return;
 	}
 
