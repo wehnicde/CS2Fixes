@@ -41,6 +41,7 @@
 #include "utils/entity.h"
 #include "utlstring.h"
 #include "zombiereborn.h"
+#include "timewalker.h"
 #undef snprintf
 #include "vendor/nlohmann/json.hpp"
 
@@ -190,11 +191,7 @@ void ParseWeaponCommand(const CCommand& args, CCSPlayerController* player)
 
 	if (!found)
 	{
-		WeaponPurchaseCount_t purchase = {};
-
-		purchase.m_nCount = 1;
-		purchase.m_nItemDefIndex = pWeaponInfo->m_iItemDefinitionIndex;
-
+		WeaponPurchaseCount_t purchase(pPawn, pWeaponInfo->m_iItemDefinitionIndex, 1);
 		weaponPurchases->AddToTail(purchase);
 	}
 
@@ -259,6 +256,12 @@ void RegisterWeaponCommands()
 	}
 }
 
+std::map<uint32, CChatCommand*>& CommandList()
+{
+	static std::map<uint32, CChatCommand*> commandList;
+	return commandList;
+}
+
 void ParseChatCommand(const char* pMessage, CCSPlayerController* pController)
 {
 	if (!pController || !pController->IsConnected())
@@ -273,10 +276,10 @@ void ParseChatCommand(const char* pMessage, CCSPlayerController* pController)
 	for (int i = 0; name[i]; i++)
 		name[i] = tolower(name[i]);
 
-	uint16 index = g_CommandList.Find(hash_32_fnv1a_const(name.c_str()));
+	uint32 nameHash = hash_32_fnv1a_const(name.c_str());
 
-	if (g_CommandList.IsValidIndex(index))
-		(*g_CommandList[index])(args, pController);
+	if (CommandList().contains(nameHash))
+		(*CommandList()[nameHash])(args, pController);
 }
 
 bool CChatCommand::CheckCommandAccess(CCSPlayerController* pPlayer, uint64 flags)
@@ -436,6 +439,213 @@ CON_COMMAND_CHAT(noshake, "- toggle noshake")
 CConVar<bool> g_cvarEnableHide("cs2f_hide_enable", FCVAR_NONE, "Whether to enable hide (WARNING: randomly crashes clients since 2023-12-13 CS2 update)", false);
 CConVar<int> g_cvarDefaultHideDistance("cs2f_hide_distance_default", FCVAR_NONE, "The default distance for hide", 250, true, 0, false, 0);
 CConVar<int> g_cvarMaxHideDistance("cs2f_hide_distance_max", FCVAR_NONE, "The max distance for hide", 2000, true, 0, false, 0);
+CConVar<int> g_cvarHiddenTeam("cs2f_hidden_team", FCVAR_NONE, "Which team is hidden (0 = none, 2 = T, 3 = CT)", 0, true, 0, true, 3);
+CConVar<float> g_cvarNoiseDuration("cs2f_noise_duration", FCVAR_NONE, "How long players stay visible after making noise (0 = always hidden)", 3.0f, true, 0.0f, true, 10.0f);
+
+CON_COMMAND_CHAT(noisetime, "<seconds> - Set how long you stay visible after making noise (0 = always hidden)")
+{
+	if (!g_cvarEnableHide.Get())
+		return;
+
+	if (args.ArgC() < 2)
+	{
+		ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "Current noise duration: %.1f seconds", g_cvarNoiseDuration.Get());
+		return;
+	}
+
+	float duration = V_StringToFloat32(args[1], -1.0f);
+	if (duration < 0.0f || duration > 10.0f) // Allow 0.0f now
+	{
+		ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "Noise duration must be between 0.0 and 10.0 seconds (0 = always hidden)");
+		return;
+	}
+
+	g_cvarNoiseDuration.Set(duration);
+
+	if (duration == 0.0f)
+		ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "Noise visibility disabled - players stay hidden even when making noise");
+	else
+		ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "Noise duration set to %.1f seconds", duration);
+}
+
+CON_COMMAND_CHAT(hideteam, "<ct/t/both/off> - Hide an entire team from everyone")
+{
+	if (!g_cvarEnableHide.Get())
+		return;
+
+	if (!player)
+	{
+		ClientPrint(player, HUD_PRINTCONSOLE, CHAT_PREFIX "You cannot use this command from the server console.");
+		return;
+	}
+
+	if (args.ArgC() < 2)
+	{
+		ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "Usage: !hideteam <ct/t/both/off>");
+		return;
+	}
+
+	const char* teamArg = args[1];
+	int teamToHide = 0;
+
+	if (V_strcasecmp(teamArg, "ct") == 0)
+	{
+		teamToHide = 3; // CS_TEAM_CT
+		ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "Counter-Terrorists are now hidden from everyone.");
+	}
+	else if (V_strcasecmp(teamArg, "t") == 0)
+	{
+		teamToHide = 2; // CS_TEAM_T
+		ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "Terrorists are now hidden from everyone.");
+	}
+	else if (V_strcasecmp(teamArg, "both") == 0)
+	{
+		teamToHide = 1; // Special value for both teams
+		ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "Both teams are now hidden from everyone.");
+	}
+	else if (V_strcasecmp(teamArg, "off") == 0)
+	{
+		teamToHide = 0;
+		ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "Team hiding disabled.");
+	}
+	else
+	{
+		ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "Invalid team. Use: ct, t, both, or off");
+		return;
+	}
+
+	g_cvarHiddenTeam.Set(teamToHide);
+}
+
+CON_COMMAND_CHAT(timewalker, "Timewalker gamemode commands: start, stop, force, status")
+{
+    if (args.ArgC() < 2)
+    {
+        ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "Usage: !timewalker <start|stop|force|status>");
+        ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "  start - Start timewalker gamemode");
+        ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "  stop  - Stop timewalker gamemode");
+        ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "  force - Force next freeze");
+        ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "  status - Show current status");
+        return;
+    }
+
+    const char* subcommand = args[1];
+
+    if (!V_stricmp(subcommand, "start"))
+    {
+        if (!player->GetZEPlayer()->IsAdminFlagSet(ADMFLAG_GENERIC))
+        {
+            ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "You don't have permission to use this command.");
+            return;
+        }
+
+        if (!g_pTimewalkerManager)
+        {
+            ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "Timewalker manager not initialized.");
+            return;
+        }
+
+    	if (g_pTimewalkerManager->IsActive())
+    	{
+    		ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "Timewalker gamemode is already running!");
+    		return;
+    	}
+
+        g_cvarTimewalkerEnable.Set(true);
+        g_pTimewalkerManager->Reset();
+        g_pTimewalkerManager->Init();
+
+        ClientPrintAll(HUD_PRINTTALK, CHAT_PREFIX "%s started timewalker gamemode!", player->GetPlayerName());
+    }
+    else if (!V_stricmp(subcommand, "stop"))
+    {
+        if (!player->GetZEPlayer()->IsAdminFlagSet(ADMFLAG_GENERIC))
+        {
+            ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "You don't have permission to use this command.");
+            return;
+        }
+
+        if (!g_pTimewalkerManager)
+        {
+            ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "Timewalker manager not initialized.");
+            return;
+        }
+
+        g_cvarTimewalkerEnable.Set(false);
+        g_pTimewalkerManager->Reset();
+
+        ClientPrintAll(HUD_PRINTTALK, CHAT_PREFIX "%s stopped timewalker gamemode!", player->GetPlayerName());
+    }
+    else if (!V_stricmp(subcommand, "force"))
+    {
+        if (!player->GetZEPlayer()->IsAdminFlagSet(ADMFLAG_GENERIC))
+        {
+            ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "You don't have permission to use this command.");
+            return;
+        }
+
+        if (!g_pTimewalkerManager || !g_pTimewalkerManager->IsActive())
+        {
+            ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "Timewalker gamemode is not active.");
+            return;
+        }
+
+        if (g_pTimewalkerManager->IsFreezeActive())
+        {
+            ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "Timewalker freeze is already active.");
+            return;
+        }
+
+        // Force start warning phase
+        new CTimer(1.0f, false, false, []() {
+            if (g_pTimewalkerManager && g_pTimewalkerManager->IsActive())
+                g_pTimewalkerManager->StartWarning();
+            return -1.0f;
+        });
+
+        ClientPrintAll(HUD_PRINTTALK, CHAT_PREFIX "%s is forcing a timewalker freeze in 1 second...", player->GetPlayerName());
+    }
+    else if (!V_stricmp(subcommand, "status"))
+    {
+        if (!g_pTimewalkerManager)
+        {
+            ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "Timewalker manager not initialized.");
+            return;
+        }
+
+        if (!g_pTimewalkerManager->IsActive())
+        {
+            ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "Timewalker gamemode is currently \x07DISABLED");
+            return;
+        }
+
+        ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "Timewalker gamemode is \x0AENABLED");
+        ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "  Interval: \x05%.1fs \x01| Duration: \x05%.1fs \x01| Warning: \x05%.1fs",
+                   g_pTimewalkerManager->GetFreezeInterval(),
+                   g_pTimewalkerManager->GetFreezeDuration(),
+                   g_pTimewalkerManager->GetWarningDuration());
+
+        if (g_pTimewalkerManager->IsFreezeActive())
+        {
+            int timewalkerSlot = g_pTimewalkerManager->GetTimewalkerSlot();
+            CCSPlayerController* pTimewalker = timewalkerSlot >= 0 ? CCSPlayerController::FromSlot(timewalkerSlot) : nullptr;
+            const char* timewalkerName = pTimewalker ? pTimewalker->GetPlayerName() : "Unknown";
+            ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "  Status: \x09FREEZE ACTIVE \x01- Timewalker: \x03%s", timewalkerName);
+        }
+        else if (g_pTimewalkerManager->IsWarningActive())
+        {
+            ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "  Status: \x08WARNING PHASE");
+        }
+        else
+        {
+            ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "  Status: \x0AWAITING NEXT CYCLE");
+        }
+    }
+    else
+    {
+        ClientPrint(player, HUD_PRINTTALK, CHAT_PREFIX "Unknown subcommand. Use: start, stop, force, or status");
+    }
+}
 
 CON_COMMAND_CHAT(hide, "<distance> - Hide nearby players")
 {
@@ -492,9 +702,9 @@ void PrintHelp(const CCommand& args, CCSPlayerController* player)
 		{
 			ClientPrint(player, HUD_PRINTCONSOLE, "The list of all commands is:");
 
-			FOR_EACH_VEC(g_CommandList, i)
+			for (auto cmdPair : CommandList())
 			{
-				CChatCommand* cmd = g_CommandList[i];
+				CChatCommand* cmd = cmdPair.second;
 
 				if (!cmd->IsCommandFlagSet(CMDFLAG_NOHELP))
 					rgstrCommands.push_back(std::string("c_") + cmd->GetName() + " " + cmd->GetDescription());
@@ -507,9 +717,9 @@ void PrintHelp(const CCommand& args, CCSPlayerController* player)
 
 			ZEPlayer* pZEPlayer = player->GetZEPlayer();
 
-			FOR_EACH_VEC(g_CommandList, i)
+			for (auto cmdPair : CommandList())
 			{
-				CChatCommand* cmd = g_CommandList[i];
+				CChatCommand* cmd = cmdPair.second;
 				uint64 flags = cmd->GetAdminFlags();
 
 				if ((pZEPlayer->IsAdminFlagSet(flags) || ((flags & FLAG_LEADER) == FLAG_LEADER && pZEPlayer->IsLeader()))
@@ -539,9 +749,9 @@ void PrintHelp(const CCommand& args, CCSPlayerController* player)
 
 		if (!player)
 		{
-			FOR_EACH_VEC(g_CommandList, i)
+			for (auto cmdPair : CommandList())
 			{
-				CChatCommand* cmd = g_CommandList[i];
+				CChatCommand* cmd = cmdPair.second;
 
 				if (!cmd->IsCommandFlagSet(CMDFLAG_NOHELP)
 					&& ((!bOnlyCheckStart && V_stristr(cmd->GetName(), pszSearchTerm))
@@ -553,9 +763,9 @@ void PrintHelp(const CCommand& args, CCSPlayerController* player)
 		{
 			ZEPlayer* pZEPlayer = player->GetZEPlayer();
 
-			FOR_EACH_VEC(g_CommandList, i)
+			for (auto cmdPair : CommandList())
 			{
-				CChatCommand* cmd = g_CommandList[i];
+				CChatCommand* cmd = cmdPair.second;
 				uint64 flags = cmd->GetAdminFlags();
 
 				if ((pZEPlayer->IsAdminFlagSet(flags) || ((flags & FLAG_LEADER) == FLAG_LEADER && pZEPlayer->IsLeader()))
@@ -656,9 +866,9 @@ CON_COMMAND_CHAT(spec, "[name] - Spectate another player or join spectators")
 		CPlayer_ObserverServices* pObserverServices = pPlayer->GetPawn()->m_pObserverServices();
 		if (!pObserverServices)
 			return -1.0f;
-		pObserverServices->m_iObserverMode.Set(OBS_MODE_IN_EYE);
-		pObserverServices->m_iObserverLastMode.Set(OBS_MODE_ROAMING);
-		pObserverServices->m_hObserverTarget.Set(pTargetPlayer->GetPawn());
+		pObserverServices->m_iObserverMode = OBS_MODE_IN_EYE;
+		pObserverServices->m_iObserverLastMode = OBS_MODE_ROAMING;
+		pObserverServices->m_hObserverTarget = pTargetPlayer->GetPawn();
 		ClientPrint(pPlayer, HUD_PRINTTALK, CHAT_PREFIX "Spectating player %s.", pTargetPlayer->GetPlayerName());
 		return -1.0f;
 	});
